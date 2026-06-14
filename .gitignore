@@ -1,0 +1,35 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env
+!.env.example
+
+# Android build artifacts
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+
+# Android signing files (CRITICAL - DO NOT COMMIT)
+android/upload-keystore.jks
+android/keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.gradle
+.project
+.classpath
+.settings/
+
