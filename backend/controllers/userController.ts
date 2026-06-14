@@ -1129,7 +1129,12 @@ async function sendEmailWithFallback(
   }
 
   console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting SMTP delivery to ${toEmail} via Gmail SMTP...`);
-  
+
+  // Mask sensitive env var output when logging
+  const maskedUser = typeof user === 'string' ? user.replace(/(.{2}).+@/, '$1***@') : String(user);
+  const passLength = typeof rawPass === 'string' ? rawPass.trim().length : 0;
+  console.log(`[EMAIL-AUDIT] [${auditLabel}] SMTP config preview: host=${host}, port=${port}, user=${maskedUser}, passLength=${passLength}`);
+
   try {
     const transporter = nodemailer.createTransport({
       host,
@@ -1137,30 +1142,64 @@ async function sendEmailWithFallback(
       secure: port === 465,
       auth: { user, pass },
       family: 4,
-      tls: { rejectUnauthorized: false }
+      tls: { rejectUnauthorized: false },
+      logger: true,
+      debug: true,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000,
     } as any);
 
-    const info = await transporter.sendMail({
+    // Verify SMTP connection before attempting to send. This surfaces DNS/network/auth problems quickly.
+    try {
+      await transporter.verify();
+      console.log(`[EMAIL-AUDIT] [${auditLabel}] SMTP transporter verified OK (connect/auth succeeded).`);
+    } catch (verifyErr: any) {
+      console.error(`[EMAIL-AUDIT] [${auditLabel}] SMTP transporter verification failed:`, verifyErr && (verifyErr.message || verifyErr));
+      return {
+        sent: false,
+        provider: "Gmail SMTP",
+        messageId: "",
+        reason: `verify failed: ${verifyErr && (verifyErr.message || String(verifyErr))}`
+      };
+    }
+
+    // Wrap sendMail with an explicit timeout to avoid silent hangs in production.
+    const mailOptions = {
       from: `"${process.env.SMTP_SENDER_NAME || 'HealthMate Support'}" <${user}>`,
       to: toEmail,
       subject,
       text,
       html,
-    });
+    };
 
-    console.log(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery successful:`, info.messageId);
-    return { 
-      sent: true, 
-      provider: "Gmail SMTP", 
-      messageId: info.messageId
+    const sendPromise = transporter.sendMail(mailOptions);
+    const timeoutMs = 25000;
+
+    const info = await Promise.race([
+      sendPromise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMail timeout after ${timeoutMs}ms`)), timeoutMs))
+    ]);
+
+    console.log(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery successful:`, (info && (info.messageId || info.response)) || info);
+    return {
+      sent: true,
+      provider: "Gmail SMTP",
+      messageId: info && (info.messageId || info.response) || ""
     };
   } catch (err: any) {
-    console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, err.message);
+    // Log full error object for root-cause analysis (avoid leaking secrets)
+    try {
+      console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, err && (err.stack || err));
+    } catch (logErr) {
+      console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed (logging error)`, logErr);
+    }
+
     return {
       sent: false,
       provider: "Gmail SMTP",
       messageId: "",
-      reason: err.message
+      reason: err && (err.message || String(err))
     };
   }
 }
