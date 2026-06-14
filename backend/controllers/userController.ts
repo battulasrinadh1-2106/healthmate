@@ -1101,12 +1101,37 @@ async function sendEmailWithFallback(
   html: string,
   auditLabel: string
 ): Promise<{ sent: boolean; provider: string; messageId: string; reason?: string }> {
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || "", 10);
-  const user = process.env.SMTP_USER;
+  const rawHost = process.env.SMTP_HOST;
+  const rawPort = process.env.SMTP_PORT;
+  const rawUser = process.env.SMTP_USER;
   const rawPass = process.env.SMTP_PASS;
+  const senderName = process.env.SMTP_SENDER_NAME?.trim() || "HealthMate Support";
+  const sendGridKey = process.env.SENDGRID_API_KEY?.trim();
+  const smtpDebug = process.env.ENABLE_SMTP_DEBUG === "true";
 
-  if (!host || !port || !user || !rawPass) {
+  const host = rawHost?.trim();
+  const user = rawUser?.trim();
+  const port = parseInt(rawPort?.trim() || "", 10) || 587;
+  let pass = typeof rawPass === "string" ? rawPass.trim() : "";
+
+  if ((pass.startsWith('"') && pass.endsWith('"')) || (pass.startsWith("'") && pass.endsWith("'"))) {
+    pass = pass.slice(1, -1).trim();
+  }
+
+  if (host && (host.includes("gmail") || host.includes("google"))) {
+    pass = pass.replace(/\s+/g, "");
+  }
+
+  const maskedUser = typeof user === 'string' ? user.replace(/(.{2}).+@/, '$1***@') : String(user);
+  const passLength = pass.length;
+  console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting email delivery to ${toEmail} via ${sendGridKey ? "SendGrid" : "Gmail SMTP"}...`);
+  console.log(`[EMAIL-AUDIT] [${auditLabel}] Email config preview: provider=${sendGridKey ? "sendgrid" : "smtp"}, host=${host || "missing"}, port=${port}, user=${maskedUser}, passLength=${passLength}, smtpDebug=${smtpDebug}`);
+
+  if (sendGridKey) {
+    return await sendSendGridEmail(toEmail, subject, text, html, senderName, auditLabel, sendGridKey);
+  }
+
+  if (!host || !port || !user || !pass) {
     console.error(`[EMAIL-AUDIT] [${auditLabel}] Missing SMTP configuration.`);
     return {
       sent: false,
@@ -1115,42 +1140,22 @@ async function sendEmailWithFallback(
       reason: "Missing SMTP configuration"
     };
   }
-  
-  let pass = rawPass.trim();
-  // Strip surrounding quotes if present
-  if ((pass.startsWith('"') && pass.endsWith('"')) || (pass.startsWith("'") && pass.endsWith("'"))) {
-    pass = pass.slice(1, -1);
-  }
-  pass = pass.trim();
-
-  // For Gmail SMTP servers, normalize by stripping all spaces if any
-  if (host.includes("gmail") || host.includes("google")) {
-    pass = pass.replace(/\s+/g, "");
-  }
-
-  console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting SMTP delivery to ${toEmail} via Gmail SMTP...`);
-
-  // Mask sensitive env var output when logging
-  const maskedUser = typeof user === 'string' ? user.replace(/(.{2}).+@/, '$1***@') : String(user);
-  const passLength = typeof rawPass === 'string' ? rawPass.trim().length : 0;
-  console.log(`[EMAIL-AUDIT] [${auditLabel}] SMTP config preview: host=${host}, port=${port}, user=${maskedUser}, passLength=${passLength}`);
 
   try {
     const transporter = nodemailer.createTransport({
       host,
       port,
       secure: port === 465,
+      requireTLS: port === 587,
       auth: { user, pass },
-      family: 4,
-      tls: { rejectUnauthorized: false },
-      logger: true,
-      debug: true,
+      tls: { rejectUnauthorized: true },
+      logger: smtpDebug,
+      debug: smtpDebug,
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 20000,
     } as any);
 
-    // Verify SMTP connection before attempting to send. This surfaces DNS/network/auth problems quickly.
     try {
       await transporter.verify();
       console.log(`[EMAIL-AUDIT] [${auditLabel}] SMTP transporter verified OK (connect/auth succeeded).`);
@@ -1164,9 +1169,8 @@ async function sendEmailWithFallback(
       };
     }
 
-    // Wrap sendMail with an explicit timeout to avoid silent hangs in production.
     const mailOptions = {
-      from: `"${process.env.SMTP_SENDER_NAME || 'HealthMate Support'}" <${user}>`,
+      from: `"${senderName}" <${user}>`,
       to: toEmail,
       subject,
       text,
@@ -1176,7 +1180,7 @@ async function sendEmailWithFallback(
     const sendPromise = transporter.sendMail(mailOptions);
     const timeoutMs = 25000;
 
-    const info = await Promise.race([
+    const info: any = await Promise.race([
       sendPromise,
       new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMail timeout after ${timeoutMs}ms`)), timeoutMs))
     ]);
@@ -1188,7 +1192,6 @@ async function sendEmailWithFallback(
       messageId: info && (info.messageId || info.response) || ""
     };
   } catch (err: any) {
-    // Log full error object for root-cause analysis (avoid leaking secrets)
     try {
       console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, err && (err.stack || err));
     } catch (logErr) {
@@ -1198,6 +1201,66 @@ async function sendEmailWithFallback(
     return {
       sent: false,
       provider: "Gmail SMTP",
+      messageId: "",
+      reason: err && (err.message || String(err))
+    };
+  }
+}
+
+async function sendSendGridEmail(
+  toEmail: string,
+  subject: string,
+  text: string,
+  html: string,
+  senderName: string,
+  auditLabel: string,
+  apiKey: string
+): Promise<{ sent: boolean; provider: string; messageId: string; reason?: string }> {
+  const fromEmail = process.env.SMTP_USER?.trim() || "no-reply@healthmate.app";
+  const payload = {
+    personalizations: [{ to: [{ email: toEmail }] }],
+    from: { email: fromEmail, name: senderName },
+    subject,
+    content: [
+      { type: "text/plain", value: text },
+      { type: "text/html", value: html }
+    ]
+  };
+
+  console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting SendGrid delivery to ${toEmail}...`);
+
+  try {
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text();
+      console.error(`[EMAIL-AUDIT] [${auditLabel}] SendGrid delivery failed: ${response.status} ${response.statusText} - ${bodyText}`);
+      return {
+        sent: false,
+        provider: "SendGrid",
+        messageId: "",
+        reason: `SendGrid ${response.status}: ${bodyText}`
+      };
+    }
+
+    console.log(`[EMAIL-AUDIT] [${auditLabel}] SendGrid delivery accepted: status=${response.status}`);
+    return {
+      sent: true,
+      provider: "SendGrid",
+      messageId: `${response.status}`
+    };
+  } catch (err: any) {
+    console.error(`[EMAIL-AUDIT] [${auditLabel}] SendGrid delivery failed:`, err && (err.stack || err));
+    return {
+      sent: false,
+      provider: "SendGrid",
       messageId: "",
       reason: err && (err.message || String(err))
     };

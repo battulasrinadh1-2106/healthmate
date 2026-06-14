@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from "express";
 import { type Request, type Response } from "express";
+import net from "net";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { connectDB } from "./backend/config/db.ts";
@@ -44,6 +45,28 @@ async function startServer() {
         "Scalable BMIRecord tracking controller loggers"
       ],
       timestamp: new Date().toISOString()
+    });
+  });
+
+  app.get("/api/debug/smtp-connect", (req: Request, res: Response) => {
+    if (process.env.ENABLE_SMTP_DEBUG !== "true") {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const smtpHost = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+    const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10) || 587;
+    const socket = net.createConnection({ host: smtpHost, port: smtpPort, timeout: 10000 }, () => {
+      socket.end();
+      res.json({ ok: true, host: smtpHost, port: smtpPort, note: "TCP connect succeeded to SMTP host" });
+    });
+
+    socket.on("error", (err) => {
+      res.status(502).json({ ok: false, error: String(err) });
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy();
+      res.status(504).json({ ok: false, error: "TCP connect timed out to SMTP host" });
     });
   });
 
