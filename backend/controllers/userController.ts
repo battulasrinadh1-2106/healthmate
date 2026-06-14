@@ -8,6 +8,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { FOODS_DATABASE } from "../../src/data/foods.ts";
 import { findLocalFood, CUSTOM_ROASTS, type LocalFoodItem } from "./foodDatabase.ts";
 import crypto from "crypto";
+import dns from "dns";
 import nodemailer from "nodemailer";
 
 let aiClient: GoogleGenAI | null = null;
@@ -1145,6 +1146,7 @@ async function sendEmailWithFallback(
     const transporter = nodemailer.createTransport({
       host,
       port,
+      family: 4,
       secure: port === 465,
       requireTLS: port === 587,
       auth: { user, pass },
@@ -1154,6 +1156,15 @@ async function sendEmailWithFallback(
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 20000,
+      lookup: (hostname: string, options: any, callback: any) => {
+        dns.resolve4(hostname, (err: any, addresses: string[]) => {
+          if (err) {
+            callback(err);
+          } else {
+            callback(null, addresses[0], 4);
+          }
+        });
+      }
     } as any);
 
     try {
