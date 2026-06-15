@@ -54,6 +54,15 @@ async function startServer() {
       timestamp: new Date().toISOString()
     });
   });
+  app.get("/privacy-policy", (req, res) => {
+  res.send(`
+    <h1>HealthMate Privacy Policy</h1>
+    <p>We collect Email, BMI Data, Step Data and Future Self Messages.</p>
+    <p>We use this information only for health tracking features.</p>
+    <p>We do not sell user data.</p>
+    <p>Contact: otp21@healthmates.xyz</p>
+  `);
+});
 
   app.get("/api/debug/smtp-connect", (req: Request, res: Response) => {
     if (process.env.ENABLE_SMTP_DEBUG !== "true") {
