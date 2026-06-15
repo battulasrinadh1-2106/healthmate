@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config();
-
+import cors from "cors";
 import express from "express";
 import { type Request, type Response } from "express";
 import net from "net";
@@ -11,6 +11,13 @@ import userRoutes from "./backend/routes/userRoutes.ts";
 
 async function startServer() {
   const app = express();
+  app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
   const PORT = 3000;
 
   // Body parser limit increase for reliability
