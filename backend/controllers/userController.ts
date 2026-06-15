@@ -1143,43 +1143,37 @@ async function sendEmailWithFallback(
   }
 
   try {
+    // Prefer implicit TLS (SMTPS) on port 465 for Gmail on Render to avoid
+    // STARTTLS/port-587 network path differences which can trigger timeouts
+    // in restricted hosting environments. Keep IPv4-only DNS lookup.
+    const transportPort = (host && host.includes("gmail")) ? 465 : port;
+    const secureFlag = transportPort === 465;
+
     const transporter = nodemailer.createTransport({
       host,
-      port,
+      port: transportPort,
       family: 4,
-      secure: port === 465,
-      requireTLS: port === 587,
+      secure: secureFlag,
+      requireTLS: !secureFlag && transportPort === 587,
       auth: { user, pass },
       tls: { rejectUnauthorized: true },
       logger: smtpDebug,
       debug: smtpDebug,
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000,
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 30000,
       lookup: (hostname: string, options: any, callback: any) => {
         dns.resolve4(hostname, (err: any, addresses: string[]) => {
-          if (err) {
-            callback(err);
-          } else {
-            callback(null, addresses[0], 4);
-          }
+          if (err) return callback(err);
+          return callback(null, addresses[0], 4);
         });
       }
     } as any);
 
-    try {
-      await transporter.verify();
-      console.log(`[EMAIL-AUDIT] [${auditLabel}] SMTP transporter verified OK (connect/auth succeeded).`);
-    } catch (verifyErr: any) {
-      console.error(`[EMAIL-AUDIT] [${auditLabel}] SMTP transporter verification failed:`, verifyErr && (verifyErr.message || verifyErr));
-      return {
-        sent: false,
-        provider: "Gmail SMTP",
-        messageId: "",
-        reason: `verify failed: ${verifyErr && (verifyErr.message || String(verifyErr))}`
-      };
-    }
-
+    // Remove explicit transporter.verify() — on Render this step can produce
+    // a false negative due to network/port restrictions during the lightweight
+    // verification handshake. Proceed directly to sendMail and handle timeouts
+    // and errors explicitly so we rely on the real delivery attempt.
     const mailOptions = {
       from: `"${senderName}" <${user}>`,
       to: toEmail,
@@ -1188,20 +1182,29 @@ async function sendEmailWithFallback(
       html,
     };
 
-    const sendPromise = transporter.sendMail(mailOptions);
-    const timeoutMs = 25000;
+    const timeoutMs = 30000;
+    try {
+      const sendPromise = transporter.sendMail(mailOptions);
+      const info: any = await Promise.race([
+        sendPromise,
+        new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMail timeout after ${timeoutMs}ms`)), timeoutMs))
+      ]);
 
-    const info: any = await Promise.race([
-      sendPromise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMail timeout after ${timeoutMs}ms`)), timeoutMs))
-    ]);
-
-    console.log(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery successful:`, (info && (info.messageId || info.response)) || info);
-    return {
-      sent: true,
-      provider: "Gmail SMTP",
-      messageId: info && (info.messageId || info.response) || ""
-    };
+      console.log(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery successful:`, (info && (info.messageId || info.response)) || info);
+      return {
+        sent: true,
+        provider: "Gmail SMTP",
+        messageId: info && (info.messageId || info.response) || ""
+      };
+    } catch (sendErr: any) {
+      console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, sendErr && (sendErr.stack || sendErr));
+      return {
+        sent: false,
+        provider: "Gmail SMTP",
+        messageId: "",
+        reason: sendErr && (sendErr.message || String(sendErr))
+      };
+    }
   } catch (err: any) {
     try {
       console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, err && (err.stack || err));
