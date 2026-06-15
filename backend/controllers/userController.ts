@@ -8,8 +8,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { FOODS_DATABASE } from "../../src/data/foods.ts";
 import { findLocalFood, CUSTOM_ROASTS, type LocalFoodItem } from "./foodDatabase.ts";
 import crypto from "crypto";
-import dns from "dns";
-import nodemailer from "nodemailer";
+import {Resend} from "resend";
 
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI {
@@ -1093,7 +1092,7 @@ Choose from existing high-quality general food photo patterns or similar valid, 
 }
 
 /**
- * Sends email using configured production SMTP credentials.
+ * Sends email using configured Resend API credentials.
  */
 async function sendEmailWithFallback(
   toEmail: string,
@@ -1102,179 +1101,52 @@ async function sendEmailWithFallback(
   html: string,
   auditLabel: string
 ): Promise<{ sent: boolean; provider: string; messageId: string; reason?: string }> {
-  const rawHost = process.env.SMTP_HOST;
-  const rawPort = process.env.SMTP_PORT;
-  const rawUser = process.env.SMTP_USER;
-  const rawPass = process.env.SMTP_PASS;
+  const resendApiKey = process.env.RESEND_API_KEY?.trim();
+  const resendFromEmail = process.env.RESEND_FROM_EMAIL?.trim();
   const senderName = process.env.SMTP_SENDER_NAME?.trim() || "HealthMate Support";
-  const sendGridKey = process.env.SENDGRID_API_KEY?.trim();
-  const smtpDebug = process.env.ENABLE_SMTP_DEBUG === "true";
 
-  const host = rawHost?.trim();
-  const user = rawUser?.trim();
-  const port = parseInt(rawPort?.trim() || "", 10) || 587;
-  let pass = typeof rawPass === "string" ? rawPass.trim() : "";
-
-  if ((pass.startsWith('"') && pass.endsWith('"')) || (pass.startsWith("'") && pass.endsWith("'"))) {
-    pass = pass.slice(1, -1).trim();
-  }
-
-  if (host && (host.includes("gmail") || host.includes("google"))) {
-    pass = pass.replace(/\s+/g, "");
-  }
-
-  const maskedUser = typeof user === 'string' ? user.replace(/(.{2}).+@/, '$1***@') : String(user);
-  const passLength = pass.length;
-  console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting email delivery to ${toEmail} via ${sendGridKey ? "SendGrid" : "Gmail SMTP"}...`);
-  console.log(`[EMAIL-AUDIT] [${auditLabel}] Email config preview: provider=${sendGridKey ? "sendgrid" : "smtp"}, host=${host || "missing"}, port=${port}, user=${maskedUser}, passLength=${passLength}, smtpDebug=${smtpDebug}`);
-
-  if (sendGridKey) {
-    return await sendSendGridEmail(toEmail, subject, text, html, senderName, auditLabel, sendGridKey);
-  }
-
-  if (!host || !port || !user || !pass) {
-    console.error(`[EMAIL-AUDIT] [${auditLabel}] Missing SMTP configuration.`);
+  if (!resendApiKey || !resendFromEmail) {
+    console.error(`[EMAIL-AUDIT] [${auditLabel}] Missing Resend configuration: RESEND_API_KEY or RESEND_FROM_EMAIL is not set.`);
     return {
       sent: false,
-      provider: "Gmail SMTP",
+      provider: "Resend",
       messageId: "",
-      reason: "Missing SMTP configuration"
+      reason: "Missing Resend configuration"
     };
   }
 
+  const resend = new Resend(resendApiKey);
+  const from = `${senderName} <${resendFromEmail}>`;
+  const timeoutMs = 30000;
+
+  console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting email delivery to ${toEmail} via Resend...`);
+  console.log(`[EMAIL-AUDIT] [${auditLabel}] Email config preview: provider=resend, from=${from}`);
+
   try {
-    // Prefer implicit TLS (SMTPS) on port 465 for Gmail on Render to avoid
-    // STARTTLS/port-587 network path differences which can trigger timeouts
-    // in restricted hosting environments. Keep IPv4-only DNS lookup.
-    const transportPort = (host && host.includes("gmail")) ? 465 : port;
-    const secureFlag = transportPort === 465;
-
-    const transporter = nodemailer.createTransport({
-      host,
-      port: transportPort,
-      family: 4,
-      secure: secureFlag,
-      requireTLS: !secureFlag && transportPort === 587,
-      auth: { user, pass },
-      tls: { rejectUnauthorized: true },
-      logger: smtpDebug,
-      debug: smtpDebug,
-      connectionTimeout: 20000,
-      greetingTimeout: 20000,
-      socketTimeout: 30000,
-      lookup: (hostname: string, options: any, callback: any) => {
-        dns.resolve4(hostname, (err: any, addresses: string[]) => {
-          if (err) return callback(err);
-          return callback(null, addresses[0], 4);
-        });
-      }
-    } as any);
-
-    // Remove explicit transporter.verify() — on Render this step can produce
-    // a false negative due to network/port restrictions during the lightweight
-    // verification handshake. Proceed directly to sendMail and handle timeouts
-    // and errors explicitly so we rely on the real delivery attempt.
-    const mailOptions = {
-      from: `"${senderName}" <${user}>`,
+    const sendPromise = resend.emails.send({
+      from,
       to: toEmail,
       subject,
-      text,
       html,
-    };
-
-    const timeoutMs = 30000;
-    try {
-      const sendPromise = transporter.sendMail(mailOptions);
-      const info: any = await Promise.race([
-        sendPromise,
-        new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMail timeout after ${timeoutMs}ms`)), timeoutMs))
-      ]);
-
-      console.log(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery successful:`, (info && (info.messageId || info.response)) || info);
-      return {
-        sent: true,
-        provider: "Gmail SMTP",
-        messageId: info && (info.messageId || info.response) || ""
-      };
-    } catch (sendErr: any) {
-      console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, sendErr && (sendErr.stack || sendErr));
-      return {
-        sent: false,
-        provider: "Gmail SMTP",
-        messageId: "",
-        reason: sendErr && (sendErr.message || String(sendErr))
-      };
-    }
-  } catch (err: any) {
-    try {
-      console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed:`, err && (err.stack || err));
-    } catch (logErr) {
-      console.error(`[EMAIL-AUDIT] [${auditLabel}] Gmail SMTP delivery failed (logging error)`, logErr);
-    }
-
-    return {
-      sent: false,
-      provider: "Gmail SMTP",
-      messageId: "",
-      reason: err && (err.message || String(err))
-    };
-  }
-}
-
-async function sendSendGridEmail(
-  toEmail: string,
-  subject: string,
-  text: string,
-  html: string,
-  senderName: string,
-  auditLabel: string,
-  apiKey: string
-): Promise<{ sent: boolean; provider: string; messageId: string; reason?: string }> {
-  const fromEmail = process.env.SMTP_USER?.trim() || "no-reply@healthmate.app";
-  const payload = {
-    personalizations: [{ to: [{ email: toEmail }] }],
-    from: { email: fromEmail, name: senderName },
-    subject,
-    content: [
-      { type: "text/plain", value: text },
-      { type: "text/html", value: html }
-    ]
-  };
-
-  console.log(`[EMAIL-AUDIT] [${auditLabel}] Attempting SendGrid delivery to ${toEmail}...`);
-
-  try {
-    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload),
+      text,
     });
 
-    if (!response.ok) {
-      const bodyText = await response.text();
-      console.error(`[EMAIL-AUDIT] [${auditLabel}] SendGrid delivery failed: ${response.status} ${response.statusText} - ${bodyText}`);
-      return {
-        sent: false,
-        provider: "SendGrid",
-        messageId: "",
-        reason: `SendGrid ${response.status}: ${bodyText}`
-      };
-    }
+    const response: any = await Promise.race([
+      sendPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`Resend timeout after ${timeoutMs}ms`)), timeoutMs))
+    ]);
 
-    console.log(`[EMAIL-AUDIT] [${auditLabel}] SendGrid delivery accepted: status=${response.status}`);
+    console.log(`[EMAIL-AUDIT] [${auditLabel}] Resend delivery successful:`, response?.id || response);
     return {
       sent: true,
-      provider: "SendGrid",
-      messageId: `${response.status}`
+      provider: "Resend",
+      messageId: response?.id || ""
     };
   } catch (err: any) {
-    console.error(`[EMAIL-AUDIT] [${auditLabel}] SendGrid delivery failed:`, err && (err.stack || err));
+    console.error(`[EMAIL-AUDIT] [${auditLabel}] Resend delivery failed:`, err && (err.stack || err));
     return {
       sent: false,
-      provider: "SendGrid",
+      provider: "Resend",
       messageId: "",
       reason: err && (err.message || String(err))
     };
@@ -1282,7 +1154,7 @@ async function sendSendGridEmail(
 }
 
 /**
- * Sends a secure password reset email using the Gmail SMTP server.
+ * Sends a secure password reset email using the Resend API.
  */
 async function sendResetEmail(email: string, resetUrl: string, userName: string) {
   const mailSubject = "HealthMate - Reset Your Password";
@@ -1316,7 +1188,7 @@ async function sendResetEmail(email: string, resetUrl: string, userName: string)
 }
 
 /**
- * Sends a secure verification email using the Gmail SMTP server.
+ * Sends a secure verification email using the Resend API.
  */
 async function sendOtpEmail(email: string, otp: string, userName: string) {
   const mailSubject = "Your HealthMate Verification Code";
