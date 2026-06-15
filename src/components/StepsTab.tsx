@@ -354,6 +354,7 @@ export default function StepsTab({
         headers: { "x-user-id": userId || "" }
       });
       const json = await res.json();
+
       if (json.success && json.data) {
         setFutureSelfState(json.data);
         // Persist newly fetched state to fast-load cache
@@ -502,6 +503,7 @@ export default function StepsTab({
 
     try {
       // Corrected API parameter to meet server-side expectations
+      alert("BEFORE API CALL");
       const res = await apiFetch(`/api/future-self/onboard`, {
         method: "POST",
         headers: {
@@ -514,6 +516,11 @@ export default function StepsTab({
         })
       });
       const json = await res.json();
+      alert(
+        `STATUS=${res.status}\n` +
+          JSON.stringify(json)
+      );
+
       if (json.success && json.data) {
         setFutureSelfState(json.data);
         triggerLocalNotification("🌌 Connected! Your future self sent a Day 1 transmission.");
@@ -1022,8 +1029,13 @@ export default function StepsTab({
                           ) : (
                             <button 
                               type="button"
-                              disabled={submittingOnboard || isNextDisabled}
-                              onClick={handleOnboardSubmit}
+                              disabled={false}
+                              //onClick={handleOnboardSubmit}
+                              onClick={() => {
+                                 alert("BUTTON WORKING");
+                                 handleOnboardSubmit();
+                                }}
+
                               className="bg-amber-500 hover:bg-amber-450 text-slate-950 hover:scale-[1.01] active:scale-98 px-6 py-2 rounded-xl text-xs font-black shadow-lg shadow-amber-500/15 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-all font-mono inline-flex items-center gap-1.5"
                               id="btn-onboard-finish"
                             >

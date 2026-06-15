@@ -15,7 +15,7 @@ async function startServer() {
   cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization","x-user-id"],
   })
 );
   const PORT = 3000;
