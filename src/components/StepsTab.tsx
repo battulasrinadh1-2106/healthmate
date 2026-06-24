@@ -503,7 +503,7 @@ export default function StepsTab({
 
     try {
       // Corrected API parameter to meet server-side expectations
-      alert("BEFORE API CALL");
+  
       const res = await apiFetch(`/api/future-self/onboard`, {
         method: "POST",
         headers: {
@@ -516,10 +516,7 @@ export default function StepsTab({
         })
       });
       const json = await res.json();
-      alert(
-        `STATUS=${res.status}\n` +
-          JSON.stringify(json)
-      );
+      
 
       if (json.success && json.data) {
         setFutureSelfState(json.data);
@@ -1032,7 +1029,7 @@ export default function StepsTab({
                               disabled={false}
                               //onClick={handleOnboardSubmit}
                               onClick={() => {
-                                 alert("BUTTON WORKING");
+                          
                                  handleOnboardSubmit();
                                 }}
 

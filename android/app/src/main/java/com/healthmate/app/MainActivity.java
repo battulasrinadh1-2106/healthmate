@@ -1,4 +1,4 @@
-package com.healthmate.app;
+package com.srinadh.myhealthmate.app;
 
 import com.getcapacitor.BridgeActivity;
 

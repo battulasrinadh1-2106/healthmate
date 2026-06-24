@@ -11,7 +11,7 @@ import MainPage from './components/MainPage';
 import Auth from './components/Auth';
 import HealthMateCompanionWidget from './components/HealthMateCompanionWidget';
 import { apiFetch } from './lib/api';
-
+import LoadingScreen from './components/LoadingScreen';
 type AppStep = 'splash' | 'auth' | 'setup' | 'main';
 
 export default function App() {
@@ -65,6 +65,7 @@ export default function App() {
       if (storedUser) {
         const parsedUser = JSON.parse(storedUser);
         setAuthUser(parsedUser);
+        setStep('main');
 
         // Fetch fresh profile state from backend
         apiFetch('/api/get-profile', {
@@ -228,6 +229,12 @@ export default function App() {
     setAuthUser(null);
     setStep('auth');
   };
+  if (
+  step === 'main' &&
+  (!profile || !authUser)
+) {
+  return <LoadingScreen />;
+}
 
   return (
     <div className="relative min-h-screen bg-[#050B14] text-slate-100 flex flex-col font-sans transition-all duration-300">
