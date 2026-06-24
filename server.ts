@@ -63,6 +63,32 @@ async function startServer() {
     <p>Contact: healthmateofficial21@gmail.com</p>
   `);
 });
+app.get("/delete-account", (req, res) => {
+  res.send(`
+    <h1>HealthMate Account Deletion</h1>
+
+    <p>
+      Users can request deletion of their HealthMate account and associated data
+      by emailing:
+    </p>
+
+    <p><b>healthmateofficial21@gmail.com</b></p>
+
+    <h3>Data deleted:</h3>
+    <ul>
+      <li>Email Address</li>
+      <li>BMI Records</li>
+      <li>Step Tracking Data</li>
+      <li>Future Self Messages</li>
+      <li>Profile Information</li>
+    </ul>
+
+    <h3>Retention Period</h3>
+    <p>
+      Account deletion requests are processed within 30 days.
+    </p>
+  `);
+});
 
   app.get("/api/debug/smtp-connect", (req: Request, res: Response) => {
     if (process.env.ENABLE_SMTP_DEBUG !== "true") {
